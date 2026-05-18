@@ -78,6 +78,10 @@ parse_args() {
         esac
         shift
     done
+    case $BELL_ACTION in
+        none|current|other|any) ;;
+        *) err "invalid --bell-action: $BELL_ACTION (must be none|current|other|any)"; exit 2 ;;
+    esac
 }
 
 # ask_yn PROMPT DEFAULT(yes|no)
@@ -129,6 +133,39 @@ remove_block() {
             buf = ""
             print
         }
+    ' "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
+
+# has_user_setting FILE PATTERN
+# Returns 0 if PATTERN matches a line *outside* the bell-bash block. False
+# positives from re-installs are suppressed by skipping lines inside our own
+# managed region (PRD §11.8).
+has_user_setting() {
+    local file=$1 pattern=$2
+    [[ -f "$file" ]] || return 1
+    awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" -v p="$pattern" '
+        $0 == b { inside = 1; next }
+        $0 == e { inside = 0; next }
+        !inside && $0 ~ p { found = 1 }
+        END { exit !found }
+    ' "$file"
+}
+
+# comment_out_conflicts FILE PATTERN
+# Prefix matching lines (outside our block, not already commented) with a
+# `# [bell-bash] commented out:  ` marker so they're easy to find later.
+comment_out_conflicts() {
+    local file=$1 pattern=$2
+    local tmp; tmp=$(mktemp)
+    awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" -v p="$pattern" '
+        $0 == b { inside = 1 }
+        $0 == e { inside = 0 }
+        !inside && $0 ~ p && $0 !~ /^[[:space:]]*#/ {
+            print "# [bell-bash] commented out:  " $0
+            next
+        }
+        { print }
     ' "$file" > "$tmp"
     mv "$tmp" "$file"
 }
@@ -195,6 +232,67 @@ step_install_bashrc() {
     log "Wrote bell-bash block to $BASHRC"
 }
 
+step_install_tmux() {
+    if (( NO_TMUX )); then
+        log "Skipping ~/.tmux.conf (--no-tmux)"
+        return
+    fi
+
+    # Resolve the bell-action: if the user did not pass --bell-action and an
+    # interactive tty is available, ask. The flag value (default 'other') is
+    # used as the prompt's default and as the silent answer in --all mode.
+    local action=$BELL_ACTION
+    if [[ -f "$TMUXCONF" ]] && ! (( ASSUME_YES )) && [[ -t 0 ]]; then
+        local input=''
+        printf '[bell-bash] tmux bell-action (none|current|other|any) [%s]: ' "$action" >/dev/tty
+        read -r input </dev/tty || input=''
+        if [[ -n "$input" ]]; then
+            case $input in
+                none|current|other|any) action=$input ;;
+                *) warn "invalid bell-action: $input — keeping $action" ;;
+            esac
+        fi
+    fi
+
+    if [[ -f "$TMUXCONF" ]] && ! ask_yn "Update $TMUXCONF?" yes; then
+        log "Skipped $TMUXCONF"
+        return
+    fi
+
+    # Conflict detection — only lines outside any bell-bash block count.
+    local conflict_pattern='(monitor-bell|visual-bell)[[:space:]]+off'
+    local comment_conflicts=0
+    if has_user_setting "$TMUXCONF" "$conflict_pattern"; then
+        warn "Detected pre-existing 'monitor-bell off' / 'visual-bell off' in $TMUXCONF."
+        warn "tmux uses last-write-wins, so our block at the end will override these."
+        if ask_yn "Comment out the conflicting lines so the override is obvious?" no; then
+            comment_conflicts=1
+        fi
+    fi
+
+    backup_file "$TMUXCONF"
+    [[ -f "$TMUXCONF" ]] || touch "$TMUXCONF"
+
+    if (( comment_conflicts )); then
+        comment_out_conflicts "$TMUXCONF" "$conflict_pattern"
+    fi
+    remove_block "$TMUXCONF"
+    {
+        if [[ -s "$TMUXCONF" ]] && [[ -n "$(tail -c 1 "$TMUXCONF" 2>/dev/null)" ]]; then
+            printf '\n'
+        fi
+        printf '%s\n' "$BEGIN_MARKER"
+        sed "s/@BELL_ACTION@/${action}/g" "$REPO_DIR/bell.tmux.conf"
+        printf '%s\n' "$END_MARKER"
+    } >> "$TMUXCONF"
+    log "Wrote bell-bash block to $TMUXCONF (bell-action=$action)"
+
+    if pgrep -x tmux >/dev/null 2>&1; then
+        log "tmux is running — apply the new settings with:"
+        log "  tmux source-file $TMUXCONF"
+    fi
+}
+
 do_uninstall() {
     local touched=0
     if [[ -f "$BASHRC" ]] && grep -qF "$BEGIN_MARKER" "$BASHRC"; then
@@ -242,6 +340,10 @@ main() {
         err "missing $REPO_DIR/bell"
         exit 1
     fi
+    if [[ ! -f "$REPO_DIR/bell.tmux.conf" ]]; then
+        err "missing $REPO_DIR/bell.tmux.conf"
+        exit 1
+    fi
     if [[ $ACTION == uninstall ]]; then
         do_uninstall
         return
@@ -249,7 +351,7 @@ main() {
     step_copy_lib
     step_choose_backends
     step_install_bashrc
-    # step_install_tmux deferred to commit 7
+    step_install_tmux
     step_summary
 }
 
