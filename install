@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+# bell-bash installer — fzf-style, idempotent.
+#
+# Inserts a managed block bracketed by BEGIN_MARKER/END_MARKER into ~/.bashrc
+# (and, in a later step, ~/.tmux.conf). Re-running replaces the block in
+# place. --uninstall removes the block(s); the library directory is left
+# intact so users can re-enable later.
+#
+# All prompts default to safe behavior:
+#   --yes / --all means "use declared default", *not* "force yes" — so the
+#   conflict-override prompt (default no) won't silently clobber user
+#   settings even under automation.
+
+set -Eeuo pipefail
+
+REPO_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+
+# Locations
+INSTALL_DIR=${BELL_BASH_HOME:-$HOME/.bell-bash}
+BASHRC=${BELL_BASH_BASHRC:-$HOME/.bashrc}
+TMUXCONF=${BELL_BASH_TMUXCONF:-$HOME/.tmux.conf}
+
+BEGIN_MARKER='# >>> bell-bash >>>'
+END_MARKER='# <<< bell-bash <<<'
+
+# Action + flags
+ACTION='install'
+ASSUME_YES=0
+NO_BASHRC=0
+NO_TMUX=0
+THRESHOLD='5'
+BELL_ACTION='other'
+BACKENDS_FLAG=''
+BACKENDS=''
+
+# Colors
+if [[ -t 1 ]]; then
+    C_INFO=$'\033[36m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'; C_RESET=$'\033[0m'
+else
+    C_INFO=''; C_WARN=''; C_ERR=''; C_RESET=''
+fi
+log()  { printf '%b[bell-bash]%b %s\n' "$C_INFO" "$C_RESET" "$*"; }
+warn() { printf '%b[bell-bash]%b %s\n' "$C_WARN" "$C_RESET" "$*" >&2; }
+err()  { printf '%b[bell-bash]%b %s\n' "$C_ERR"  "$C_RESET" "$*" >&2; }
+
+usage() {
+    cat <<'EOF'
+Usage: ./install [OPTIONS]
+
+  --uninstall              Remove the bell-bash block from rc files (backup
+                           created). Library directory is preserved.
+  --yes, --all             Non-interactive: use declared defaults for every
+                           prompt. (Defaults are biased toward safe behavior —
+                           e.g., the conflict-override prompt defaults to "no",
+                           so user settings are never silently clobbered.)
+  --no-bashrc              Don't touch ~/.bashrc.
+  --no-tmux                Don't touch ~/.tmux.conf.
+  --threshold=N            Auto-trigger threshold in seconds (default 5).
+  --bell-action=VAL        none|current|other|any for tmux (default other).
+  --backends=LIST          Comma-separated backend list (default bel; skips
+                           backend prompts when given).
+  -h, --help               Show this help.
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --uninstall)        ACTION='uninstall' ;;
+            --yes|--all)        ASSUME_YES=1 ;;
+            --no-bashrc)        NO_BASHRC=1 ;;
+            --no-tmux)          NO_TMUX=1 ;;
+            --threshold=*)      THRESHOLD=${1#*=} ;;
+            --bell-action=*)    BELL_ACTION=${1#*=} ;;
+            --backends=*)       BACKENDS_FLAG=${1#*=} ;;
+            -h|--help)          usage; exit 0 ;;
+            *)                  err "unknown option: $1"; usage >&2; exit 2 ;;
+        esac
+        shift
+    done
+}
+
+# ask_yn PROMPT DEFAULT(yes|no)
+#
+# Returns 0 for yes, 1 for no. If --yes/--all is set or stdin is not a tty,
+# returns based on DEFAULT — not based on "yes" — so safe defaults
+# propagate to automated installs.
+ask_yn() {
+    local prompt=$1 default=$2
+    if (( ASSUME_YES )) || ! [[ -t 0 ]]; then
+        [[ $default == yes ]]
+        return
+    fi
+    local hint='[y/N]'
+    [[ $default == yes ]] && hint='[Y/n]'
+    local ans=''
+    read -rp "$prompt $hint " ans </dev/tty || true
+    case ${ans,,} in
+        y|yes) return 0 ;;
+        n|no)  return 1 ;;
+        '')    [[ $default == yes ]] ;;
+        *)     [[ $default == yes ]] ;;
+    esac
+}
+
+# remove_block FILE
+#
+# Strip the BEGIN..END block out of FILE. Trailing blank lines that would
+# otherwise accumulate on each install are discarded by buffering blank
+# lines and flushing them only when followed by non-blank content (PRD
+# §11.7) — without this, every re-run would push a new blank line onto
+# the end of the file.
+remove_block() {
+    local file=$1
+    [[ -f "$file" ]] || return 0
+    local tmp; tmp=$(mktemp)
+    awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
+        $0 == b { skip = 1; next }
+        skip {
+            if ($0 == e) skip = 0
+            next
+        }
+        /^[[:space:]]*$/ {
+            buf = buf $0 "\n"
+            next
+        }
+        {
+            printf "%s", buf
+            buf = ""
+            print
+        }
+    ' "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
+
+backup_file() {
+    local file=$1
+    [[ -f "$file" ]] || return 0
+    local backup="${file}.bell-bash.bak.$(date +%Y%m%d-%H%M%S)"
+    cp -f "$file" "$backup"
+    log "Backed up $file → $backup"
+}
+
+step_copy_lib() {
+    mkdir -p "$INSTALL_DIR"
+    cp -f "$REPO_DIR/bell" "$INSTALL_DIR/bell"
+    log "Installed library to $INSTALL_DIR/bell"
+}
+
+step_choose_backends() {
+    if [[ -n "$BACKENDS_FLAG" ]]; then
+        BACKENDS=$BACKENDS_FLAG
+        log "Using --backends=$BACKENDS"
+        return
+    fi
+    local list='bel'
+    if command -v notify-send >/dev/null 2>&1; then
+        if ask_yn "Enable desktop toasts via notify-send?" yes; then
+            list="${list},notify-send"
+        fi
+    fi
+    if command -v noti >/dev/null 2>&1; then
+        if ask_yn "Enable webhook alerts via 'noti send'?" no; then
+            list="${list},webhook"
+            if [[ -z "${NOTI_WEBHOOK:-}" ]]; then
+                warn "NOTI_WEBHOOK is not set — webhook will silently no-op until you export it."
+            fi
+        fi
+    fi
+    BACKENDS=$list
+}
+
+step_install_bashrc() {
+    if (( NO_BASHRC )); then
+        log "Skipping ~/.bashrc (--no-bashrc)"
+        return
+    fi
+    if ! ask_yn "Install hook into $BASHRC?" yes; then
+        log "Skipped $BASHRC"
+        return
+    fi
+    backup_file "$BASHRC"
+    remove_block "$BASHRC"
+    {
+        # If the file doesn't end in a newline, insert one before our block.
+        if [[ -s "$BASHRC" ]] && [[ -n "$(tail -c 1 "$BASHRC" 2>/dev/null)" ]]; then
+            printf '\n'
+        fi
+        printf '%s\n' "$BEGIN_MARKER"
+        printf 'export BELL_BASH_THRESHOLD=%s\n' "$THRESHOLD"
+        printf "export BELL_BASH_BACKENDS='%s'\n" "$BACKENDS"
+        printf 'source "%s/bell"\n' "$INSTALL_DIR"
+        printf '%s\n' "$END_MARKER"
+    } >> "$BASHRC"
+    log "Wrote bell-bash block to $BASHRC"
+}
+
+do_uninstall() {
+    local touched=0
+    if [[ -f "$BASHRC" ]] && grep -qF "$BEGIN_MARKER" "$BASHRC"; then
+        backup_file "$BASHRC"
+        remove_block "$BASHRC"
+        log "Removed bell-bash block from $BASHRC"
+        touched=1
+    fi
+    if [[ -f "$TMUXCONF" ]] && grep -qF "$BEGIN_MARKER" "$TMUXCONF"; then
+        backup_file "$TMUXCONF"
+        remove_block "$TMUXCONF"
+        log "Removed bell-bash block from $TMUXCONF"
+        touched=1
+    fi
+    if (( ! touched )); then
+        log "Nothing to uninstall."
+        return
+    fi
+    log "Library directory preserved at $INSTALL_DIR"
+    log "Open a fresh shell to pick up the change."
+}
+
+step_summary() {
+    cat <<EOF
+
+[bell-bash] installed.
+
+  threshold:  ${THRESHOLD}s
+  backends:   ${BACKENDS}
+  library:    ${INSTALL_DIR}/bell
+
+Open a new terminal (or 'source $BASHRC') and try:
+
+  sleep 6                  # auto-trigger after threshold
+  bell echo hi             # explicit wrapper
+  false; bell              # explicit postfix
+  bell_skip help           # skip-list reference
+
+EOF
+}
+
+main() {
+    parse_args "$@"
+    if [[ ! -f "$REPO_DIR/bell" ]]; then
+        err "missing $REPO_DIR/bell"
+        exit 1
+    fi
+    if [[ $ACTION == uninstall ]]; then
+        do_uninstall
+        return
+    fi
+    step_copy_lib
+    step_choose_backends
+    step_install_bashrc
+    # step_install_tmux deferred to commit 7
+    step_summary
+}
+
+main "$@"
