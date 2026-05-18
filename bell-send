@@ -63,18 +63,39 @@ TITLE=${1:-bell-send}
 BODY=${2:-}
 
 backend_bel() {
-    # Send BEL where it can reach the user. In agent contexts stderr is
-    # captured by the agent, while /dev/tty (when the process has a
-    # controlling terminal) is the user's actual tmux pane / terminal —
-    # exactly where tmux's monitor-bell or the emulator's visual bell
-    # will catch it.
+    # Send BEL where it can reach the user.
     #
-    # The redirection itself can fail (no controlling tty). Wrap the
-    # write in a group so the *bash redirection error message* gets
-    # captured by 2>/dev/null too, not just the printf's own output.
-    if ! { printf '\a' >/dev/tty; } 2>/dev/null; then
-        { printf '\a' >&2; } 2>/dev/null || true
+    # Path 1 — /dev/tty: works for interactive shells and any caller
+    # with a controlling terminal. Inside tmux this IS the pane tty,
+    # so monitor-bell catches it directly.
+    #
+    # Path 2 — $TMUX_PANE → pane_tty: agent bash_tool contexts (Claude
+    # Code, Cursor, etc.) run detached without a controlling terminal,
+    # so /dev/tty fails. But the agent is still rendered inside a tmux
+    # pane, and tmux exports $TMUX_PANE into the child env. Writing
+    # BEL to that pane's slave pty injects it into the master read
+    # side, which is exactly what tmux's monitor-bell watches.
+    #
+    # Path 3 — stderr: last resort. In agent contexts stderr is
+    # captured by the agent, so the user never sees the bell, but
+    # it's still better than silently dropping it for a caller that
+    # logs stderr somewhere visible.
+    #
+    # Each redirection is wrapped in a brace group so the bash
+    # *redirection error message* (e.g. "no such device or address")
+    # is captured by the outer 2>/dev/null, not just the printf's own
+    # output.
+    if { printf '\a' >/dev/tty; } 2>/dev/null; then
+        return 0
     fi
+    if [[ -n "${TMUX_PANE:-}" ]] && command -v tmux >/dev/null 2>&1; then
+        local pane_tty
+        pane_tty=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}' 2>/dev/null) || pane_tty=''
+        if [[ -n $pane_tty ]] && { printf '\a' >"$pane_tty"; } 2>/dev/null; then
+            return 0
+        fi
+    fi
+    { printf '\a' >&2; } 2>/dev/null || true
 }
 
 backend_notify_send() {
