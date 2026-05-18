@@ -20,6 +20,124 @@ fi
 : "${BELL_BASH_BACKENDS:=bel}"       # comma-separated: bel,notify-send,webhook
 : "${BELL_BASH_TIMEOUT_MS:=4000}"    # notify-send toast duration
 
+# --- skip-list (auto-trigger only) -----------------------------------------
+#
+# Default list — interactive programs whose long runtime is normal and
+# expected, so completion alerts would be noise. User can override entirely
+# by pre-defining BELL_BASH_SKIP_LIST before sourcing this file.
+
+if ! declare -p BELL_BASH_SKIP_LIST >/dev/null 2>&1; then
+    BELL_BASH_SKIP_LIST=(
+        # editors
+        vi vim nvim emacs nano
+        # pagers
+        less more man tail journalctl
+        # remote / multiplexers
+        ssh mosh tmux screen
+        # monitors
+        top htop btop gdu watch
+        # REPL / interactive
+        gdb 'python3?' ipython node psql mysql sqlite3 claude
+        # multi-word patterns
+        'git[[:space:]]+lz'
+    )
+fi
+
+__bell_bash_rebuild_skip_regex() {
+    if (( ${#BELL_BASH_SKIP_LIST[@]} == 0 )); then
+        BELL_BASH_SKIP_REGEX=''
+        return
+    fi
+    # IFS=| only inside the subshell so the parent's IFS is untouched.
+    # Trailing ([[:space:]]|$) gives a word boundary so `vim` does not
+    # match `vimdiff`. Optional `sudo ` prefix is recognised.
+    BELL_BASH_SKIP_REGEX="^(sudo[[:space:]]+)?($(IFS='|'; echo "${BELL_BASH_SKIP_LIST[*]}"))([[:space:]]|$)"
+}
+
+__bell_bash_rebuild_skip_regex
+
+# --- bell_skip: runtime control of the skip-list ---------------------------
+
+bell_skip() {
+    [[ $- != *i* ]] && return 0
+
+    if (( $# == 0 )); then
+        printf '%s\n' "${BELL_BASH_SKIP_LIST[@]}"
+        return 0
+    fi
+
+    local sub=$1; shift
+    case $sub in
+        '+='|add)
+            local p added=() existing
+            for p in "$@"; do
+                local present=0
+                for existing in "${BELL_BASH_SKIP_LIST[@]}"; do
+                    [[ "$existing" == "$p" ]] && { present=1; break; }
+                done
+                if (( ! present )); then
+                    BELL_BASH_SKIP_LIST+=("$p")
+                    added+=("$p")
+                fi
+            done
+            __bell_bash_rebuild_skip_regex
+            for p in "${added[@]}"; do printf '+ %s\n' "$p"; done
+            ;;
+        '-='|remove|rm)
+            local p removed=() new existing found
+            for p in "$@"; do
+                new=()
+                found=0
+                for existing in "${BELL_BASH_SKIP_LIST[@]}"; do
+                    if [[ "$existing" == "$p" ]]; then
+                        found=1
+                    else
+                        new+=("$existing")
+                    fi
+                done
+                BELL_BASH_SKIP_LIST=("${new[@]}")
+                (( found )) && removed+=("$p")
+            done
+            __bell_bash_rebuild_skip_regex
+            for p in "${removed[@]}"; do printf -- '- %s\n' "$p"; done
+            ;;
+        test)
+            if (( $# == 0 )); then
+                echo "bell_skip: 'test' needs a command" >&2
+                return 2
+            fi
+            local cmdline="$*"
+            if [[ -n "${BELL_BASH_SKIP_REGEX:-}" && "$cmdline" =~ $BELL_BASH_SKIP_REGEX ]]; then
+                printf 'SKIP:   %s\n' "$cmdline"
+            else
+                printf 'NOTIFY: %s\n' "$cmdline"
+            fi
+            ;;
+        help|-h|--help)
+            cat <<'USAGE'
+Usage: bell_skip [SUBCOMMAND] [PATTERN ...]
+
+  bell_skip                       List current skip patterns.
+  bell_skip += PATTERN ...        Add patterns (idempotent).
+  bell_skip -= PATTERN ...        Remove patterns.
+  bell_skip add PATTERN ...       Alias of +=.
+  bell_skip remove PATTERN ...    Alias of -=.
+  bell_skip rm PATTERN ...        Alias of -=.
+  bell_skip test COMMAND ...      Dry-run: print SKIP or NOTIFY.
+  bell_skip help                  Show this message.
+
+Patterns are POSIX extended regular expressions, anchored at line start
+with an optional `sudo ` prefix and a word-boundary tail. Use
+[[:space:]]+ for multi-word patterns (e.g. 'git[[:space:]]+lz').
+USAGE
+            ;;
+        *)
+            echo "bell_skip: unknown subcommand: $sub (try 'bell_skip help')" >&2
+            return 2
+            ;;
+    esac
+}
+
 # --- backends --------------------------------------------------------------
 
 __bell_bash_backend_bel() {
