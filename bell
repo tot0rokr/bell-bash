@@ -203,12 +203,21 @@ bell() {
 
     if (( $# == 0 )); then
         exit_code=$__bb_prev
+        # Pull the line the user actually typed from history. It includes the
+        # `; bell` (or `&& bell`, etc.) suffix that invoked us — that's an
+        # unavoidable consequence of bash storing the whole prompt line as a
+        # single history entry, and is still much more informative than the
+        # literal string "previous command".
+        local cmd
+        cmd=$(HISTTIMEFORMAT='' history 1 2>/dev/null \
+              | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//')
+        [[ -z $cmd ]] && cmd='previous command'
         if (( exit_code == 0 )); then
             title="✅ done"
         else
             title="❌ failed (exit ${exit_code})"
         fi
-        body=$(printf 'previous command\nhost: %s  cwd: %s' "$host" "$PWD")
+        body=$(printf '%s\nhost: %s  cwd: %s' "$cmd" "$host" "$PWD")
         __bell_bash_dispatch "$exit_code" "$title" "$body"
         return "$exit_code"
     fi
