@@ -147,6 +147,25 @@ __bell_bash_backend_bel() {
     printf '\a' >&2
 }
 
+__bell_bash_backend_notify_send() {
+    command -v notify-send >/dev/null 2>&1 || return 0
+    local exit_code=$1 title=$2 body=$3
+    local urgency='normal'
+    (( exit_code == 0 )) || urgency='critical'
+    # Detached subshell — prompt latency stays at zero even if dbus is slow.
+    ( notify-send -u "$urgency" -t "$BELL_BASH_TIMEOUT_MS" \
+                  -- "$title" "$body" >/dev/null 2>&1 & disown ) 2>/dev/null
+}
+
+__bell_bash_backend_webhook() {
+    command -v noti >/dev/null 2>&1 || return 0
+    [[ -n "${NOTI_WEBHOOK:-}" ]] || return 0
+    local exit_code=$1 title=$2 body=$3
+    # Join title and body onto a single line; noti will forward as the message.
+    local msg="${title} — ${body//$'\n'/ • }"
+    ( noti send "$msg" >/dev/null 2>&1 & disown ) 2>/dev/null
+}
+
 # --- dispatch --------------------------------------------------------------
 
 __bell_bash_dispatch() {
@@ -157,8 +176,10 @@ __bell_bash_dispatch() {
         backend=${backend// /}
         [[ -z $backend ]] && continue
         case $backend in
-            bel) __bell_bash_backend_bel "$exit_code" "$title" "$body" ;;
-            *)   : ;;
+            bel)           __bell_bash_backend_bel "$exit_code" "$title" "$body" ;;
+            notify-send)   __bell_bash_backend_notify_send "$exit_code" "$title" "$body" ;;
+            webhook)       __bell_bash_backend_webhook "$exit_code" "$title" "$body" ;;
+            *)             : ;;
         esac
     done
 }
