@@ -170,9 +170,12 @@ __bell_bash_backend_webhook() {
 
 __bell_bash_dispatch() {
     local exit_code=$1 title=$2 body=$3
+    # Optional 4th arg overrides the env default. Empty = use env.
+    local backends=${4:-}
+    [[ -z $backends ]] && backends=$BELL_BASH_BACKENDS
     local backend
     local IFS=','
-    for backend in $BELL_BASH_BACKENDS; do
+    for backend in $backends; do
         backend=${backend// /}
         [[ -z $backend ]] && continue
         case $backend in
@@ -186,8 +189,13 @@ __bell_bash_dispatch() {
 
 # --- explicit trigger: bell ------------------------------------------------
 #
-# Wrapper:  bell make -j8          → run, alert on its exit, return same code
-# Postfix:  cmd1 && cmd2; bell     → alert on the previous command's $?
+# Wrapper:  bell [--backends=LIST] make -j8     → run, alert, return same code
+# Postfix:  cmd1 && cmd2; bell [--backends=LIST]  → alert on previous $?
+#
+# --backends= overrides BELL_BASH_BACKENDS for this call only. Useful for
+# `bell --backends=webhook ./long_build.sh` when you want the Slack ping but
+# nothing local, or `bell --backends=notify-send` for a quiet desktop-only
+# alert.
 #
 # Always fires regardless of skip-list — an explicit call means the user wants
 # the notification.
@@ -198,6 +206,26 @@ bell() {
     # mode where the caller relied on the previous command's exit code.
     local __bb_prev=$?
     [[ $- != *i* ]] && return "$__bb_prev"
+    local backends_override=''
+    while (( $# > 0 )); do
+        case $1 in
+            --backends=*) backends_override=${1#*=}; shift ;;
+            --backends)   shift; backends_override=${1:-}; shift ;;
+            --help|-h)
+                cat <<'USAGE'
+Usage: bell [--backends=LIST] [--] [COMMAND ...]
+
+  bell COMMAND ...              Run COMMAND, alert on its exit, return same code.
+  bell                          Alert on the previous command's $?.
+  bell --backends=LIST [...]    Override BELL_BASH_BACKENDS for this call.
+                                LIST is comma-separated: bel,notify-send,webhook.
+USAGE
+                return 0 ;;
+            --)           shift; break ;;
+            --*)          echo "bell: unknown option: $1 (try 'bell --help')" >&2; return 2 ;;
+            *)            break ;;
+        esac
+    done
     local exit_code title body
     local host=${HOSTNAME%%.*}
 
@@ -218,7 +246,7 @@ bell() {
             title="❌ failed (exit ${exit_code})"
         fi
         body=$(printf '%s\nhost: %s  cwd: %s' "$cmd" "$host" "$PWD")
-        __bell_bash_dispatch "$exit_code" "$title" "$body"
+        __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override"
         return "$exit_code"
     fi
 
@@ -230,7 +258,7 @@ bell() {
         title="❌ failed (exit ${exit_code})"
     fi
     body=$(printf '%s\nhost: %s  cwd: %s' "$*" "$host" "$PWD")
-    __bell_bash_dispatch "$exit_code" "$title" "$body"
+    __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override"
     return "$exit_code"
 }
 
