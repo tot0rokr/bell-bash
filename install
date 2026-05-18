@@ -19,6 +19,7 @@ REPO_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 INSTALL_DIR=${BELL_BASH_HOME:-$HOME/.bell-bash}
 BASHRC=${BELL_BASH_BASHRC:-$HOME/.bashrc}
 TMUXCONF=${BELL_BASH_TMUXCONF:-$HOME/.tmux.conf}
+SKILL_LINK=${BELL_BASH_SKILL_LINK:-$HOME/.claude/skills/bell}
 
 BEGIN_MARKER='# >>> bell-bash >>>'
 END_MARKER='# <<< bell-bash <<<'
@@ -28,6 +29,7 @@ ACTION='install'
 ASSUME_YES=0
 NO_BASHRC=0
 NO_TMUX=0
+NO_SKILL=0
 THRESHOLD='5'
 BELL_ACTION='other'
 BACKENDS_FLAG=''
@@ -55,6 +57,7 @@ Usage: ./install [OPTIONS]
                            so user settings are never silently clobbered.)
   --no-bashrc              Don't touch ~/.bashrc.
   --no-tmux                Don't touch ~/.tmux.conf.
+  --no-skill               Don't offer the Claude Code skill symlink.
   --threshold=N            Auto-trigger threshold in seconds (default 5).
   --bell-action=VAL        none|current|other|any for tmux (default other).
   --backends=LIST          Comma-separated backend list (default bel; skips
@@ -70,6 +73,7 @@ parse_args() {
             --yes|--all)        ASSUME_YES=1 ;;
             --no-bashrc)        NO_BASHRC=1 ;;
             --no-tmux)          NO_TMUX=1 ;;
+            --no-skill)         NO_SKILL=1 ;;
             --threshold=*)      THRESHOLD=${1#*=} ;;
             --bell-action=*)    BELL_ACTION=${1#*=} ;;
             --backends=*)       BACKENDS_FLAG=${1#*=} ;;
@@ -300,6 +304,38 @@ step_install_tmux() {
     fi
 }
 
+step_install_skill() {
+    if (( NO_SKILL )); then
+        log "Skipping Claude skill (--no-skill)"
+        return
+    fi
+    local repo_skill="$REPO_DIR/skills/bell"
+    if [[ ! -d "$repo_skill" ]]; then
+        return
+    fi
+    if ! ask_yn "Link Claude Code skill into $SKILL_LINK?" yes; then
+        log "Skipped Claude skill"
+        return
+    fi
+    mkdir -p "$(dirname "$SKILL_LINK")"
+    if [[ -L "$SKILL_LINK" ]]; then
+        local cur
+        cur=$(readlink -f "$SKILL_LINK" 2>/dev/null || true)
+        if [[ "$cur" == "$(readlink -f "$repo_skill")" ]]; then
+            log "Skill already linked: $SKILL_LINK → $repo_skill"
+            return
+        fi
+        warn "$SKILL_LINK already points to $cur — leaving it alone"
+        return
+    fi
+    if [[ -e "$SKILL_LINK" ]]; then
+        warn "$SKILL_LINK exists and is not a symlink — leaving it alone"
+        return
+    fi
+    ln -s "$repo_skill" "$SKILL_LINK"
+    log "Linked $SKILL_LINK → $repo_skill"
+}
+
 do_uninstall() {
     local touched=0
     if [[ -f "$BASHRC" ]] && grep -qF "$BEGIN_MARKER" "$BASHRC"; then
@@ -313,6 +349,17 @@ do_uninstall() {
         remove_block "$TMUXCONF"
         log "Removed bell-bash block from $TMUXCONF"
         touched=1
+    fi
+    # Remove the skill symlink only when it resolves to *our* repo — don't
+    # touch a link the user pointed elsewhere intentionally.
+    if [[ -L "$SKILL_LINK" ]]; then
+        local cur
+        cur=$(readlink -f "$SKILL_LINK" 2>/dev/null || true)
+        if [[ "$cur" == "$(readlink -f "$REPO_DIR/skills/bell" 2>/dev/null)" ]]; then
+            rm -f "$SKILL_LINK"
+            log "Removed Claude skill symlink $SKILL_LINK"
+            touched=1
+        fi
     fi
     if (( ! touched )); then
         log "Nothing to uninstall."
@@ -359,6 +406,7 @@ main() {
     step_choose_backends
     step_install_bashrc
     step_install_tmux
+    step_install_skill
     step_summary
 }
 

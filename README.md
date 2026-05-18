@@ -18,15 +18,16 @@ $ make && ./deploy.sh; bell   # 직전 명령의 $? 를 캡처해 알림
 ```bash
 git clone https://github.com/<your-fork>/bell-bash.git
 cd bell-bash
-./install                  # 대화형 (notify-send / webhook 백엔드 사용 여부 물음)
+./install                  # 대화형 (notify-send / webhook / Claude skill 사용 여부 물음)
 ./install --all            # 비대화형, 안전한 default 사용
-./install --uninstall      # 마커 블록만 제거 (라이브러리 디렉토리는 보존)
+./install --uninstall      # 마커 블록 + skill symlink 제거 (라이브러리 디렉토리는 보존)
 ./install --help           # 모든 flag 목록
 ```
 
 - `~/.bashrc` 와 `~/.tmux.conf` (있으면)에 마커 블록 `# >>> bell-bash >>>` ~ `# <<< bell-bash <<<`이 in-place로 들어간다.
 - 매 설치 전 timestamped 백업 (`~/.bashrc.bell-bash.bak.YYYYMMDD-HHMMSS`).
-- 라이브러리는 `~/.bell-bash/bell`에 복사.
+- 라이브러리는 `~/.bell-bash/bell`, CLI는 `~/.bell-bash/bin/bell-send` 에 복사 (bin은 PATH에 추가).
+- Claude Code skill은 `~/.claude/skills/bell → <repo>/skills/bell` symlink (`--no-skill` 로 skip 가능).
 - 재실행해도 라인이 누적되지 않음 (idempotent).
 
 설치 후 새 터미널을 열거나 `source ~/.bashrc` 후 사용.
@@ -50,7 +51,9 @@ LLM 에이전트의 `bash_tool`, `bash -c`, `./script.sh` 내부, `ssh host cmd`
 
 ## 백엔드
 
-`BELL_BASH_BACKENDS` (콤마 분리, default `bel`) 에 enable된 백엔드만 호출된다. prerequisite 미충족 백엔드는 silent no-op이라 다른 백엔드는 정상 동작한다.
+`BELL_BASH_BACKENDS` (콤마 분리, default `bel,notify-send`) 에 enable된 백엔드만 호출된다. prerequisite 미충족 백엔드는 silent no-op이라 다른 백엔드는 정상 동작한다. 한 번만 다른 조합을 쓰고 싶으면 `bell --backends=webhook make` 식으로 per-call override 가능.
+
+`bell-send` standalone CLI는 동일한 백엔드 조합을 비-interactive 컨텍스트(스크립트, cron, Claude Code 같은 agent의 bash_tool)에서 발사한다 — interactive 가드와 무관하게 동작. Claude Code skill (`skills/bell/SKILL.md`)이 이걸 이용해서 응답 끝에 desktop toast, 긴 작업 끝에 webhook까지 자동으로 쏘게 한다.
 
 | 백엔드 | 의존성 | 효과 |
 |---|---|---|
