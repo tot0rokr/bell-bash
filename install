@@ -179,9 +179,14 @@ backup_file() {
 }
 
 step_copy_lib() {
-    mkdir -p "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/bin"
     cp -f "$REPO_DIR/bell" "$INSTALL_DIR/bell"
     log "Installed library to $INSTALL_DIR/bell"
+    if [[ -f "$REPO_DIR/bell-send" ]]; then
+        cp -f "$REPO_DIR/bell-send" "$INSTALL_DIR/bin/bell-send"
+        chmod +x "$INSTALL_DIR/bin/bell-send"
+        log "Installed CLI to $INSTALL_DIR/bin/bell-send"
+    fi
 }
 
 step_choose_backends() {
@@ -226,6 +231,8 @@ step_install_bashrc() {
         printf '%s\n' "$BEGIN_MARKER"
         printf 'export BELL_BASH_THRESHOLD=%s\n' "$THRESHOLD"
         printf "export BELL_BASH_BACKENDS='%s'\n" "$BACKENDS"
+        # Put bell-send on PATH so scripts and agents can call it directly.
+        printf 'export PATH="%s/bin:$PATH"\n' "$INSTALL_DIR"
         printf 'source "%s/bell"\n' "$INSTALL_DIR"
         printf '%s\n' "$END_MARKER"
     } >> "$BASHRC"

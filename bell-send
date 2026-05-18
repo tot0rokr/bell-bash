@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# bell-send — fire bell-bash backends from a non-interactive context.
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# The shell library `bell` is interactive-only (it relies on PS0/DEBUG/etc.
+# hooks that don't exist in `bash -c` or agent bash_tool sessions). This CLI
+# fills the same envelope — same backends, same env-var conventions — but is
+# safe to call from anywhere: scripts, cron jobs, Claude Code's bash_tool, a
+# Makefile recipe. Every backend dispatches in a detached subshell so the
+# caller's prompt latency stays at zero.
+
+set -u
+
+BACKENDS=${BELL_BASH_BACKENDS:-bel,notify-send}
+TIMEOUT_MS=${BELL_BASH_TIMEOUT_MS:-4000}
+STATUS=0
+TITLE=''
+BODY=''
+
+usage() {
+    cat <<'EOF'
+Usage: bell-send [OPTIONS] [TITLE [BODY]]
+
+Fire bell-bash backends — BEL char, desktop toast, webhook — from any
+context. Mirrors the interactive `bell` function's dispatch logic but
+does not require sourcing ~/.bashrc, so it's the right tool for
+scripts, cron, Makefile recipes, and agent bash_tools (Claude Code,
+Cursor) that need to ping the user.
+
+Options:
+  --backends=LIST       Comma-separated subset of: bel, notify-send, webhook.
+                        Default: $BELL_BASH_BACKENDS, else 'bel,notify-send'.
+  --status=N            Exit code to embed (sets notify-send urgency to
+                        'critical' when non-zero). Default 0.
+  -h, --help            Show this help.
+
+Backends fire silently and detached. Missing prerequisites (no libnotify,
+no `noti`, no $NOTI_WEBHOOK) make the corresponding backend a no-op rather
+than an error, so partial environments still get partial alerts.
+
+Examples:
+  bell-send "build done"
+  bell-send --backends=notify-send "claude finished" "edited 3 files"
+  bell-send --backends=bel,notify-send,webhook "deploy ok" "v1.2.3"
+  bell-send --status=1 --backends=bel,notify-send "tests failed" "3 red"
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --backends=*) BACKENDS=${1#*=}; shift ;;
+        --backends)   shift; BACKENDS=${1:-}; shift ;;
+        --status=*)   STATUS=${1#*=}; shift ;;
+        --status)     shift; STATUS=${1:-0}; shift ;;
+        -h|--help)    usage; exit 0 ;;
+        --)           shift; break ;;
+        --*)          printf 'bell-send: unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+        *)            break ;;
+    esac
+done
+
+TITLE=${1:-bell-send}
+BODY=${2:-}
+
+backend_bel() {
+    # Send BEL where it can reach the user. In agent contexts stderr is
+    # captured by the agent, while /dev/tty (when the process has a
+    # controlling terminal) is the user's actual tmux pane / terminal —
+    # exactly where tmux's monitor-bell or the emulator's visual bell
+    # will catch it.
+    #
+    # The redirection itself can fail (no controlling tty). Wrap the
+    # write in a group so the *bash redirection error message* gets
+    # captured by 2>/dev/null too, not just the printf's own output.
+    if ! { printf '\a' >/dev/tty; } 2>/dev/null; then
+        { printf '\a' >&2; } 2>/dev/null || true
+    fi
+}
+
+backend_notify_send() {
+    command -v notify-send >/dev/null 2>&1 || return 0
+    local urgency='normal'
+    (( STATUS == 0 )) || urgency='critical'
+    ( notify-send -u "$urgency" -t "$TIMEOUT_MS" -- "$TITLE" "$BODY" \
+        >/dev/null 2>&1 & disown ) 2>/dev/null
+}
+
+backend_webhook() {
+    command -v noti >/dev/null 2>&1 || return 0
+    [[ -n "${NOTI_WEBHOOK:-}" ]] || return 0
+    local msg=$TITLE
+    [[ -n $BODY ]] && msg="$TITLE — $BODY"
+    ( noti send "$msg" >/dev/null 2>&1 & disown ) 2>/dev/null
+}
+
+IFS=',' read -r -a __bell_send_list <<<"$BACKENDS"
+for b in "${__bell_send_list[@]}"; do
+    b=${b// /}
+    [[ -z $b ]] && continue
+    case $b in
+        bel)         backend_bel ;;
+        notify-send) backend_notify_send ;;
+        webhook)     backend_webhook ;;
+        *)           ;;  # silently ignore unknown
+    esac
+done
