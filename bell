@@ -30,8 +30,8 @@ if ! declare -p BELL_BASH_SKIP_LIST >/dev/null 2>&1; then
     BELL_BASH_SKIP_LIST=(
         # editors
         vi vim nvim emacs nano
-        # pagers
-        less more man tail journalctl
+        # pagers + systemd CLIs that page their output
+        less more man tail journalctl systemctl
         # remote / multiplexers
         ssh mosh tmux screen
         # monitors
