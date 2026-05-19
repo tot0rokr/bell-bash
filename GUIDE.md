@@ -9,7 +9,7 @@
 `bell-bash` 는 **clone-in-place** 로 동작한다. repo 자체가 install 디렉토리:
 
 ```bash
-git clone https://github.com/<your-fork>/bell-bash.git ~/.bell-bash
+git clone https://github.com/tot0rokr/bell-bash.git ~/.bell-bash
 ~/.bell-bash/install      # 한 번만; .bashrc/.tmux.conf 마커 블록 등록
 ```
 

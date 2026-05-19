@@ -7,7 +7,7 @@ description: Ping the user with a desktop toast and terminal bell every time you
 
 This skill exists so the user can run Claude in the background. They walk away from their terminal, you finish your work, the user gets a desktop toast (and a Slack ping for the big stuff) and comes back. Without the ping they have to babysit the terminal.
 
-The underlying tool is `bell-send` (from [bell-bash](https://github.com/<your-fork>/bell-bash)), a standalone bash CLI that fires the same backends as the interactive `bell` function — BEL char to the user's tty, libnotify desktop toast, `noti send` webhook — each in a detached subshell so the call never blocks. Everything happens via the `Bash` tool.
+The underlying tool is `bell-send` (from [bell-bash](https://github.com/tot0rokr/bell-bash)), a standalone bash CLI that fires the same backends as the interactive `bell` function — BEL char to the user's tty, libnotify desktop toast, `noti send` webhook — each in a detached subshell so the call never blocks. Everything happens via the `Bash` tool.
 
 ## When to use
 

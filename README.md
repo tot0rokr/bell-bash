@@ -16,7 +16,7 @@ $ make && ./deploy.sh; bell   # 직전 명령의 $? 를 캡처해 알림
 ## 설치
 
 ```bash
-git clone https://github.com/<your-fork>/bell-bash.git ~/.bell-bash
+git clone https://github.com/tot0rokr/bell-bash.git ~/.bell-bash
 ~/.bell-bash/install       # 대화형 (notify-send / webhook / Claude skill 사용 여부 물음)
 ~/.bell-bash/install --all # 비대화형, 안전한 default 사용
 ~/.bell-bash/install --uninstall   # 마커 블록 + skill symlink 제거 (repo는 보존)
