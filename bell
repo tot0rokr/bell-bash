@@ -50,6 +50,7 @@ if ! declare -p BELL_BASH_SKIP_LIST >/dev/null 2>&1; then
         'docker[[:space:]]+logs'
         'docker[[:space:]]+exec'
         'docker[[:space:]]+attach'
+        'docker[[:space:]]+compose[[:space:]]+logs'
     )
 fi
 
