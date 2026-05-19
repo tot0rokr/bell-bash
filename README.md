@@ -54,7 +54,7 @@ LLM 에이전트의 `bash_tool`, `bash -c`, `./script.sh` 내부, `ssh host cmd`
 
 `BELL_BASH_BACKENDS` (콤마 분리, default `bel,notify-send`) 에 enable된 백엔드만 호출된다. prerequisite 미충족 백엔드는 silent no-op이라 다른 백엔드는 정상 동작한다. 한 번만 다른 조합을 쓰고 싶으면 `bell --backends=webhook make` 식으로 per-call override 가능.
 
-`bell-send` standalone CLI는 동일한 백엔드 조합을 비-interactive 컨텍스트(스크립트, cron, Claude Code 같은 agent의 bash_tool)에서 발사한다 — interactive 가드와 무관하게 동작. Claude Code skill (`skills/bell/SKILL.md`)이 이걸 이용해서 응답 끝에 desktop toast, 긴 작업 끝에 webhook까지 자동으로 쏘게 한다.
+`bell-send` standalone CLI는 동일한 백엔드 조합을 비-interactive 컨텍스트(스크립트, cron, Claude Code 같은 agent의 bash_tool)에서 발사한다 — interactive 가드와 무관하게 동작. Claude Code 에서는 Stop/Notification hook이 매 응답 끝/입력 대기 시 기본 toast를 쏘고, skill (`skills/bell/SKILL.md`)이 webhook 포함 장시간 작업 알림이나 `--status` critical urgency 같은 풍부한 케이스를 다룬다 ([Claude Code 통합](#claude-code-통합) 참조).
 
 | 백엔드 | 의존성 | 효과 |
 |---|---|---|
@@ -101,6 +101,35 @@ $ bell_skip help              # 전체 도움말
 - multi-word 패턴이 필요하면 `[[:space:]]+` 로 (예: `'svn[[:space:]]+update'`)
 
 Default 목록(28개)은 `bell_skip` 으로 확인 — editors / pagers / mux / monitors / REPL + `git` 전체. 영구히 다른 default를 쓰려면 `BELL_BASH_SKIP_LIST=( ... )` 를 source **이전에** 정의.
+
+---
+
+## Claude Code 통합
+
+`./install` 은 `~/.claude/skills/bell` symlink만 걸어준다 (`--no-skill` 로 skip). 매 응답 끝과 입력 대기 시점의 기본 toast가 필요하면 `~/.claude/settings.json` 에 hook을 직접 등록:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bell-send --backends=bel,notify-send 'claude done' >/dev/null 2>&1", "async": true }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bell-send --backends=bel,notify-send 'claude needs input' >/dev/null 2>&1", "async": true }
+        ]
+      }
+    ]
+  }
+}
+```
+
+skill 쪽은 webhook이 필요한 장시간 작업, `--status` 로 critical urgency 표시하는 실패, 커스텀 제목/본문이 필요한 케이스를 다룬다 — 자세한 사용 가이드는 [`skills/bell/SKILL.md`](./skills/bell/SKILL.md).
 
 ---
 
