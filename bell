@@ -376,15 +376,15 @@ __bell_bash_post() {
         return 0
     fi
 
-    # Slow path — we're definitely notifying, so fork cost is acceptable now.
-    # bash-preexec hands us the typed command line directly; fall back to
-    # `history 1` for the DEBUG-trap path where that's not available.
-    local cmd=${__bell_bash_cmd_line:-}
+    # Slow path — we're definitely notifying, so we can spend a bit more.
+    # bash-preexec hands us the typed command line via __bell_bash_preexec;
+    # the DEBUG-trap path captures $BASH_COMMAND in __bell_bash_pre_debug.
+    # Either way the value is per-shell — we deliberately do NOT fall back
+    # to `history 1` here, because shells that set `history -a; history -n`
+    # in PROMPT_COMMAND interleave other sessions' commands into in-memory
+    # history and we'd notify with the wrong command line.
+    local cmd=${__bell_bash_cmd_line:-(command unavailable)}
     unset __bell_bash_cmd_line
-    if [[ -z $cmd ]]; then
-        cmd=$(HISTTIMEFORMAT='' history 1 2>/dev/null \
-              | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//')
-    fi
 
     if [[ -n "${BELL_BASH_SKIP_REGEX:-}" && "$cmd" =~ $BELL_BASH_SKIP_REGEX ]]; then
         return 0
@@ -429,6 +429,14 @@ __bell_bash_pre_debug() {
     [[ -z "${__bell_bash_armed:-}" ]] && return
     __bell_bash_armed=
     __bell_bash_start=$EPOCHREALTIME
+    # Snapshot the command at start, not at end. Pulling from `history 1`
+    # later is unsafe in shells with session-shared history (`history -a;
+    # history -n` in PROMPT_COMMAND) — another session's append can land
+    # in our in-memory history between start and end and we'd notify with
+    # the wrong command line. BASH_COMMAND is per-shell and free.
+    # Caveat: for compounds like `a && b` or pipelines `a | b`, this
+    # captures only the first simple command. Better than wrong-session.
+    __bell_bash_cmd_line=$BASH_COMMAND
 }
 
 __bell_bash_prompt_command() {
