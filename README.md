@@ -16,19 +16,20 @@ $ make && ./deploy.sh; bell   # 직전 명령의 $? 를 캡처해 알림
 ## 설치
 
 ```bash
-git clone https://github.com/<your-fork>/bell-bash.git
-cd bell-bash
-./install                  # 대화형 (notify-send / webhook / Claude skill 사용 여부 물음)
-./install --all            # 비대화형, 안전한 default 사용
-./install --uninstall      # 마커 블록 + skill symlink 제거 (라이브러리 디렉토리는 보존)
-./install --help           # 모든 flag 목록
+git clone https://github.com/<your-fork>/bell-bash.git ~/.bell-bash
+~/.bell-bash/install       # 대화형 (notify-send / webhook / Claude skill 사용 여부 물음)
+~/.bell-bash/install --all # 비대화형, 안전한 default 사용
+~/.bell-bash/install --uninstall   # 마커 블록 + skill symlink 제거 (repo는 보존)
+~/.bell-bash/install --help        # 모든 flag 목록
 ```
 
-- `~/.bashrc` 와 `~/.tmux.conf` (있으면)에 마커 블록 `# >>> bell-bash >>>` ~ `# <<< bell-bash <<<`이 in-place로 들어간다.
-- 매 설치 전 timestamped 백업 (`~/.bashrc.bell-bash.bak.YYYYMMDD-HHMMSS`).
-- 라이브러리는 `~/.bell-bash/bell`, CLI는 `~/.bell-bash/bin/bell-send` 에 복사 (bin은 PATH에 추가).
+**clone-in-place 모델** — repo 위치가 곧 install 위치. installer는 파일을 복사하지 않고, `~/.bashrc` 와 `~/.tmux.conf` 에 마커 블록 `# >>> bell-bash >>>` ~ `# <<< bell-bash <<<` 만 in-place 작성한다.
+
+- 업데이트: `cd ~/.bell-bash && git pull` — install 재실행 불필요. `bell` / `bell-send` 가 바로 갱신된 코드를 가리키니까 새 터미널부터 적용됨.
+- `./install` 재실행은 idempotent — 마커 블록이 desired 와 동일하면 백업도 안 만들고 그냥 `already up to date` log. threshold/backends 같은 설정을 바꿀 때만 다시 돌리면 됨.
+- 다른 경로 (`~/projects/bell-bash` 등) 에 클론해도 됨. installer 는 자기 위치를 기준으로 path를 등록 — README 의 `~/.bell-bash` 는 권장 위치일 뿐.
 - Claude Code skill은 `~/.claude/skills/bell → <repo>/skills/bell` symlink (`--no-skill` 로 skip 가능).
-- 재실행해도 라인이 누적되지 않음 (idempotent).
+- 백업은 진짜 갱신이 일어날 때만 timestamped 로 생성됨 (`~/.bashrc.bell-bash.bak.YYYYMMDD-HHMMSS`).
 
 설치 후 새 터미널을 열거나 `source ~/.bashrc` 후 사용.
 

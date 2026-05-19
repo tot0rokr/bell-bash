@@ -4,6 +4,33 @@
 
 ---
 
+## 설치 / 업데이트
+
+`bell-bash` 는 **clone-in-place** 로 동작한다. repo 자체가 install 디렉토리:
+
+```bash
+git clone https://github.com/<your-fork>/bell-bash.git ~/.bell-bash
+~/.bell-bash/install      # 한 번만; .bashrc/.tmux.conf 마커 블록 등록
+```
+
+이후 업데이트:
+
+```bash
+cd ~/.bell-bash && git pull   # 라이브러리/CLI 바로 갱신, 새 셸부터 적용
+```
+
+`./install` 을 다시 돌릴 필요는 — threshold/backends/bell-action 같은 **설정** 을 바꿀 때만. 라이브러리 코드 변경은 `git pull` 만으로 적용됨.
+
+### v0.1 (copy-style) 에서 마이그레이션
+
+v0.1 의 installer 는 `~/.bell-bash` 로 파일을 **복사**했고, 매번 재설치가 필요했음. v0.2 는 repo 자체가 install 위치이므로:
+
+1. repo 를 적절한 위치에 클론 — 권장은 `~/.bell-bash` 지만, 이미 다른 곳에 있으면 그대로 써도 됨.
+2. `~/.bell-bash/install` 실행 — 마커 블록이 새 경로 (`$repo/bell`, `$repo/bin`) 로 갱신됨.
+3. v0.1 시절 복사된 `~/.bell-bash` 가 별도로 남아 있으면 installer 가 감지해서 알려줌. 안전하게 삭제 가능: `rm -rf ~/.bell-bash` (단, 이게 *지금 repo* 가 아닐 때만).
+
+---
+
 ## 시나리오
 
 ### 1. BSP 빌드 돌리고 자리 비울 때
