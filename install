@@ -182,6 +182,18 @@ backup_file() {
     log "Backed up $file → $backup"
 }
 
+# get_block FILE — extract the current managed block (inclusive of markers)
+# from FILE. Empty if no block present.
+get_block() {
+    local file=$1
+    [[ -f "$file" ]] || return 0
+    awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
+        $0 == b { inside = 1 }
+        inside { print }
+        $0 == e && inside { exit }
+    ' "$file"
+}
+
 step_copy_lib() {
     mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/bin"
     cp -f "$REPO_DIR/bell" "$INSTALL_DIR/bell"
@@ -216,6 +228,16 @@ step_choose_backends() {
     BACKENDS=$list
 }
 
+build_bashrc_block() {
+    printf '%s\n' "$BEGIN_MARKER"
+    printf 'export BELL_BASH_THRESHOLD=%s\n' "$THRESHOLD"
+    printf "export BELL_BASH_BACKENDS='%s'\n" "$BACKENDS"
+    # Put bell-send on PATH so scripts and agents can call it directly.
+    printf 'export PATH="%s/bin:$PATH"\n' "$INSTALL_DIR"
+    printf 'source "%s/bell"\n' "$INSTALL_DIR"
+    printf '%s\n' "$END_MARKER"
+}
+
 step_install_bashrc() {
     if (( NO_BASHRC )); then
         log "Skipping ~/.bashrc (--no-bashrc)"
@@ -225,6 +247,15 @@ step_install_bashrc() {
         log "Skipped $BASHRC"
         return
     fi
+
+    local desired current
+    desired=$(build_bashrc_block)
+    current=$(get_block "$BASHRC")
+    if [[ "$current" == "$desired" ]]; then
+        log "$BASHRC already up to date"
+        return
+    fi
+
     backup_file "$BASHRC"
     remove_block "$BASHRC"
     {
@@ -232,13 +263,7 @@ step_install_bashrc() {
         if [[ -s "$BASHRC" ]] && [[ -n "$(tail -c 1 "$BASHRC" 2>/dev/null)" ]]; then
             printf '\n'
         fi
-        printf '%s\n' "$BEGIN_MARKER"
-        printf 'export BELL_BASH_THRESHOLD=%s\n' "$THRESHOLD"
-        printf "export BELL_BASH_BACKENDS='%s'\n" "$BACKENDS"
-        # Put bell-send on PATH so scripts and agents can call it directly.
-        printf 'export PATH="%s/bin:$PATH"\n' "$INSTALL_DIR"
-        printf 'source "%s/bell"\n' "$INSTALL_DIR"
-        printf '%s\n' "$END_MARKER"
+        printf '%s\n' "$desired"
     } >> "$BASHRC"
     log "Wrote bell-bash block to $BASHRC"
 }
@@ -270,13 +295,25 @@ step_install_tmux() {
         return
     fi
 
+    local desired current
+    desired=$(
+        printf '%s\n' "$BEGIN_MARKER"
+        sed "s/@BELL_ACTION@/${action}/g" "$REPO_DIR/bell.tmux.conf"
+        printf '%s\n' "$END_MARKER"
+    )
+    current=$(get_block "$TMUXCONF")
+    if [[ "$current" == "$desired" ]]; then
+        log "$TMUXCONF already up to date (bell-action=$action)"
+        return
+    fi
+
     # Conflict detection — only lines outside any bell-bash block count.
-    local conflict_pattern='(monitor-bell|visual-bell)[[:space:]]+off'
+    local conflict_pattern='monitor-bell[[:space:]]+off'
     local comment_conflicts=0
     if has_user_setting "$TMUXCONF" "$conflict_pattern"; then
-        warn "Detected pre-existing 'monitor-bell off' / 'visual-bell off' in $TMUXCONF."
-        warn "tmux uses last-write-wins, so our block at the end will override these."
-        if ask_yn "Comment out the conflicting lines so the override is obvious?" no; then
+        warn "Detected pre-existing 'monitor-bell off' in $TMUXCONF."
+        warn "tmux uses last-write-wins, so our block at the end will override it."
+        if ask_yn "Comment out the conflicting line so the override is obvious?" no; then
             comment_conflicts=1
         fi
     fi
@@ -292,9 +329,7 @@ step_install_tmux() {
         if [[ -s "$TMUXCONF" ]] && [[ -n "$(tail -c 1 "$TMUXCONF" 2>/dev/null)" ]]; then
             printf '\n'
         fi
-        printf '%s\n' "$BEGIN_MARKER"
-        sed "s/@BELL_ACTION@/${action}/g" "$REPO_DIR/bell.tmux.conf"
-        printf '%s\n' "$END_MARKER"
+        printf '%s\n' "$desired"
     } >> "$TMUXCONF"
     log "Wrote bell-bash block to $TMUXCONF (bell-action=$action)"
 
