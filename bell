@@ -251,9 +251,18 @@ USAGE
     done
     local exit_code title body
     local host=${HOSTNAME%%.*}
+    local elapsed_text='' dur_suffix=''
 
     if (( $# == 0 )); then
         exit_code=$__bb_prev
+        # Postfix mode — borrow the preexec-set start time so the alert
+        # shows duration on success *and* failure. When no preexec hook
+        # was installed (no bash-preexec, no DEBUG trap) we just leave
+        # elapsed empty and the webhook drops the Duration field.
+        if [[ -n "${__bell_bash_start:-}" ]]; then
+            elapsed_text=$(awk -v s="$__bell_bash_start" -v e="$EPOCHREALTIME" \
+                          'BEGIN{ printf "%.2fs", e - s }')
+        fi
         # Pull the line the user actually typed from history. It includes the
         # `; bell` (or `&& bell`, etc.) suffix that invoked us — that's an
         # unavoidable consequence of bash storing the whole prompt line as a
@@ -263,26 +272,32 @@ USAGE
         cmd=$(HISTTIMEFORMAT='' history 1 2>/dev/null \
               | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//')
         [[ -z $cmd ]] && cmd='previous command'
+        [[ -n $elapsed_text ]] && dur_suffix=" (${elapsed_text})"
         if (( exit_code == 0 )); then
-            title="✅ done"
+            title="✅ done${dur_suffix}"
         else
-            title="❌ failed (exit ${exit_code})"
+            title="❌ failed exit ${exit_code}${dur_suffix}"
         fi
         body=$(printf '%s\nhost: %s  cwd: %s' "$cmd" "$host" "$PWD")
-        __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override" "$cmd" ""
+        __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override" "$cmd" "$elapsed_text"
         return "$exit_code"
     fi
 
+    # Wrapper mode — measure locally so success and failure both carry it.
     local wrapped_cmd="$*"
+    local __bb_w_start=$EPOCHREALTIME
     "$@"
     exit_code=$?
+    elapsed_text=$(awk -v s="$__bb_w_start" -v e="$EPOCHREALTIME" \
+                  'BEGIN{ printf "%.2fs", e - s }')
+    dur_suffix=" (${elapsed_text})"
     if (( exit_code == 0 )); then
-        title="✅ done"
+        title="✅ done${dur_suffix}"
     else
-        title="❌ failed (exit ${exit_code})"
+        title="❌ failed exit ${exit_code}${dur_suffix}"
     fi
     body=$(printf '%s\nhost: %s  cwd: %s' "$wrapped_cmd" "$host" "$PWD")
-    __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override" "$wrapped_cmd" ""
+    __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override" "$wrapped_cmd" "$elapsed_text"
     return "$exit_code"
 }
 
