@@ -16,7 +16,13 @@ set -Eeuo pipefail
 REPO_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 
 # Locations
-INSTALL_DIR=${BELL_BASH_HOME:-$HOME/.bell-bash}
+#
+# INSTALL_DIR defaults to the repo itself — the user clones bell-bash to
+# wherever they want it (the README recommends ~/.bell-bash) and `./install`
+# registers that location in their .bashrc. No copy step: updates are
+# `cd $repo && git pull`, not `./install` reruns. BELL_BASH_HOME is still
+# honoured for the legacy "copy elsewhere" case (we warn but don't block).
+INSTALL_DIR=${BELL_BASH_HOME:-$REPO_DIR}
 BASHRC=${BELL_BASH_BASHRC:-$HOME/.bashrc}
 TMUXCONF=${BELL_BASH_TMUXCONF:-$HOME/.tmux.conf}
 SKILL_LINK=${BELL_BASH_SKILL_LINK:-$HOME/.claude/skills/bell}
@@ -194,14 +200,37 @@ get_block() {
     ' "$file"
 }
 
-step_copy_lib() {
-    mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/bin"
-    cp -f "$REPO_DIR/bell" "$INSTALL_DIR/bell"
-    log "Installed library to $INSTALL_DIR/bell"
-    if [[ -f "$REPO_DIR/bell-send" ]]; then
-        cp -f "$REPO_DIR/bell-send" "$INSTALL_DIR/bin/bell-send"
-        chmod +x "$INSTALL_DIR/bin/bell-send"
-        log "Installed CLI to $INSTALL_DIR/bin/bell-send"
+step_check_layout() {
+    # The repo IS the install location — no copying. Verify the files we'll
+    # be pointing bashrc/tmux at exist, then warn if the user has overridden
+    # INSTALL_DIR to somewhere other than the repo (legacy "copy-elsewhere"
+    # workflow), or if a stale v0.1-style copy sits at ~/.bell-bash.
+    if [[ ! -f "$REPO_DIR/bell" ]]; then
+        err "missing $REPO_DIR/bell"
+        exit 1
+    fi
+    if [[ ! -x "$REPO_DIR/bin/bell-send" ]] && [[ ! -x "$REPO_DIR/bell-send" ]]; then
+        err "missing $REPO_DIR/bin/bell-send (or $REPO_DIR/bell-send)"
+        exit 1
+    fi
+
+    if [[ "$INSTALL_DIR" != "$REPO_DIR" ]]; then
+        warn "BELL_BASH_HOME=$INSTALL_DIR differs from repo at $REPO_DIR."
+        warn "bell-bash no longer copies files; bashrc/tmux will source from"
+        warn "$INSTALL_DIR but the actual library lives at $REPO_DIR."
+        warn "Recommended: clone (or move) the repo to $INSTALL_DIR and re-run."
+    fi
+
+    # Stale copy-style install from v0.1 — orphaned now that bashrc points
+    # at the repo. Safe to delete but don't touch it unprompted.
+    local legacy="$HOME/.bell-bash"
+    if [[ -d "$legacy" \
+       && ! -d "$legacy/.git" \
+       && -f "$legacy/bell" \
+       && "$legacy" != "$REPO_DIR" \
+       && "$legacy" != "$INSTALL_DIR" ]]; then
+        warn "Legacy copy-style install detected at $legacy"
+        warn "It's no longer used; remove with: rm -rf $legacy"
     fi
 }
 
@@ -412,6 +441,10 @@ step_summary() {
   threshold:  ${THRESHOLD}s
   backends:   ${BACKENDS}
   library:    ${INSTALL_DIR}/bell
+  CLI:        ${INSTALL_DIR}/bin/bell-send
+
+Updates: \`cd ${INSTALL_DIR} && git pull\` — no install rerun needed
+unless you want to change threshold/backends/bell-action.
 
 Open a new terminal (or 'source $BASHRC') and try:
 
@@ -425,10 +458,6 @@ EOF
 
 main() {
     parse_args "$@"
-    if [[ ! -f "$REPO_DIR/bell" ]]; then
-        err "missing $REPO_DIR/bell"
-        exit 1
-    fi
     if [[ ! -f "$REPO_DIR/bell.tmux.conf" ]]; then
         err "missing $REPO_DIR/bell.tmux.conf"
         exit 1
@@ -437,7 +466,7 @@ main() {
         do_uninstall
         return
     fi
-    step_copy_lib
+    step_check_layout
     step_choose_backends
     step_install_bashrc
     step_install_tmux
