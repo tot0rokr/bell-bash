@@ -20,6 +20,27 @@ fi
 : "${BELL_BASH_BACKENDS:=bel}"       # comma-separated: bel,notify-send,webhook
 : "${BELL_BASH_TIMEOUT_MS:=4000}"    # notify-send toast duration
 
+# Precompute the threshold in microseconds so the per-prompt hot path can use
+# pure-bash integer math instead of forking awk. Re-derived automatically by
+# __bell_bash_post whenever BELL_BASH_THRESHOLD changes at runtime.
+__bell_bash_set_threshold_us() {
+    local t=${BELL_BASH_THRESHOLD:-5} int frac
+    if [[ "$t" == *.* ]]; then
+        int=${t%.*}
+        frac=${t#*.}
+    else
+        int=$t
+        frac=0
+    fi
+    [[ -z $int ]] && int=0
+    frac=${frac}000000
+    frac=${frac:0:6}
+    # 10# forces base-10 so leading zeros don't trigger octal parsing.
+    __bell_bash_threshold_us=$(( 10#$int * 1000000 + 10#$frac ))
+    __bell_bash_threshold_seen=$BELL_BASH_THRESHOLD
+}
+__bell_bash_set_threshold_us
+
 # --- skip-list (auto-trigger only) -----------------------------------------
 #
 # Default list — interactive programs whose long runtime is normal and
@@ -332,26 +353,48 @@ __bell_bash_post() {
     local exit_code=$1
     [[ -z "${__bell_bash_start:-}" ]] && return 0
     local start=$__bell_bash_start
-    local cmd=${__bell_bash_cmd_line:-}
-    unset __bell_bash_start __bell_bash_cmd_line
+    unset __bell_bash_start
 
+    # Refresh the cached threshold if the user changed BELL_BASH_THRESHOLD live.
+    # Cheap string compare per prompt; only re-parses when the value changes.
+    if [[ "${__bell_bash_threshold_seen:-}" != "$BELL_BASH_THRESHOLD" ]]; then
+        __bell_bash_set_threshold_us
+    fi
+
+    # Fast path — pure-bash microsecond arithmetic. EPOCHREALTIME is
+    # "sec.usec6digits"; stripping the dot turns it into an integer
+    # microsecond count we can subtract and compare without forking.
+    local now_us=${EPOCHREALTIME/./}
+    local start_us=${start/./}
+    local elapsed_us=$(( now_us - start_us ))
+
+    # Bail before any string work — this is where ~99% of prompts exit. With
+    # the old code, the awk/history/sed forks above this point burned ~4ms
+    # per prompt even on commands that would never notify.
+    if (( elapsed_us < __bell_bash_threshold_us )); then
+        unset __bell_bash_cmd_line
+        return 0
+    fi
+
+    # Slow path — we're definitely notifying, so fork cost is acceptable now.
     # bash-preexec hands us the typed command line directly; fall back to
     # `history 1` for the DEBUG-trap path where that's not available.
+    local cmd=${__bell_bash_cmd_line:-}
+    unset __bell_bash_cmd_line
     if [[ -z $cmd ]]; then
         cmd=$(HISTTIMEFORMAT='' history 1 2>/dev/null \
               | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//')
     fi
 
-    local elapsed
-    elapsed=$(awk -v s="$start" -v e="$EPOCHREALTIME" \
-              'BEGIN{ printf "%.2f", e - s }')
-
-    awk -v e="$elapsed" -v t="$BELL_BASH_THRESHOLD" \
-        'BEGIN{ exit !(e + 0 >= t + 0) }' || return 0
-
     if [[ -n "${BELL_BASH_SKIP_REGEX:-}" && "$cmd" =~ $BELL_BASH_SKIP_REGEX ]]; then
         return 0
     fi
+
+    # Format elapsed as "N.NN" — pure bash, no awk.
+    local sec=$(( elapsed_us / 1000000 ))
+    local cs=$(( (elapsed_us % 1000000) / 10000 ))
+    local elapsed
+    printf -v elapsed '%d.%02d' "$sec" "$cs"
 
     local host=${HOSTNAME%%.*}
     local title body
