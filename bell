@@ -160,10 +160,30 @@ __bell_bash_backend_notify_send() {
 __bell_bash_backend_webhook() {
     command -v noti >/dev/null 2>&1 || return 0
     [[ -n "${NOTI_WEBHOOK:-}" ]] || return 0
-    local exit_code=$1 title=$2 body=$3
-    # Join title and body onto a single line; noti will forward as the message.
-    local msg="${title} — ${body//$'\n'/ • }"
-    ( noti send "$msg" >/dev/null 2>&1 & disown ) 2>/dev/null
+    local exit_code=$1 cmd=$2 elapsed=$3
+    local host=${HOSTNAME%%.*}
+    local cwd=$PWD
+
+    # noti embed renders as a coloured Discord/Slack card with title, desc,
+    # and named fields — way more legible than the one-line `title — body`
+    # that the previous `noti send` produced.
+    local status_title color
+    if (( exit_code == 0 )); then
+        status_title='✅ done'
+        color='#2ecc71'   # green
+    else
+        status_title="❌ failed (exit ${exit_code})"
+        color='#e74c3c'   # red
+    fi
+
+    local args=( embed --title "$status_title" --color "$color" )
+    # Put the command in the description as a code block — that's the line the
+    # reader's eye lands on first.
+    [[ -n $cmd ]] && args+=( --desc "$(printf '```\n%s\n```' "$cmd")" )
+    [[ -n $elapsed ]] && args+=( --field Duration "$elapsed" )
+    args+=( --field Host "$host" --field CWD "$cwd" )
+
+    ( noti "${args[@]}" >/dev/null 2>&1 & disown ) 2>/dev/null
 }
 
 # --- dispatch --------------------------------------------------------------
@@ -172,6 +192,9 @@ __bell_bash_dispatch() {
     local exit_code=$1 title=$2 body=$3
     # Optional 4th arg overrides the env default. Empty = use env.
     local backends=${4:-}
+    # Optional 5th/6th args are structured metadata for backends that can
+    # use it (currently webhook). Other backends ignore them.
+    local cmd=${5:-} elapsed=${6:-}
     [[ -z $backends ]] && backends=$BELL_BASH_BACKENDS
     local backend
     local IFS=','
@@ -181,7 +204,7 @@ __bell_bash_dispatch() {
         case $backend in
             bel)           __bell_bash_backend_bel "$exit_code" "$title" "$body" ;;
             notify-send)   __bell_bash_backend_notify_send "$exit_code" "$title" "$body" ;;
-            webhook)       __bell_bash_backend_webhook "$exit_code" "$title" "$body" ;;
+            webhook)       __bell_bash_backend_webhook "$exit_code" "$cmd" "$elapsed" ;;
             *)             : ;;
         esac
     done
@@ -246,10 +269,11 @@ USAGE
             title="❌ failed (exit ${exit_code})"
         fi
         body=$(printf '%s\nhost: %s  cwd: %s' "$cmd" "$host" "$PWD")
-        __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override"
+        __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override" "$cmd" ""
         return "$exit_code"
     fi
 
+    local wrapped_cmd="$*"
     "$@"
     exit_code=$?
     if (( exit_code == 0 )); then
@@ -257,8 +281,8 @@ USAGE
     else
         title="❌ failed (exit ${exit_code})"
     fi
-    body=$(printf '%s\nhost: %s  cwd: %s' "$*" "$host" "$PWD")
-    __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override"
+    body=$(printf '%s\nhost: %s  cwd: %s' "$wrapped_cmd" "$host" "$PWD")
+    __bell_bash_dispatch "$exit_code" "$title" "$body" "$backends_override" "$wrapped_cmd" ""
     return "$exit_code"
 }
 
@@ -311,7 +335,7 @@ __bell_bash_post() {
         title="❌ failed exit ${exit_code} (${elapsed}s)"
     fi
     body=$(printf '%s\nhost: %s  cwd: %s' "$cmd" "$host" "$PWD")
-    __bell_bash_dispatch "$exit_code" "$title" "$body"
+    __bell_bash_dispatch "$exit_code" "$title" "$body" "" "$cmd" "${elapsed}s"
 }
 
 # --- bash-preexec hooks ----------------------------------------------------

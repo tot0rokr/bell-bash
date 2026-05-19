@@ -109,9 +109,19 @@ backend_notify_send() {
 backend_webhook() {
     command -v noti >/dev/null 2>&1 || return 0
     [[ -n "${NOTI_WEBHOOK:-}" ]] || return 0
-    local msg=$TITLE
-    [[ -n $BODY ]] && msg="$TITLE — $BODY"
-    ( noti send "$msg" >/dev/null 2>&1 & disown ) 2>/dev/null
+    local color='#2ecc71'    # green
+    (( STATUS == 0 )) || color='#e74c3c'    # red
+    local host=${HOSTNAME%%.*}
+    local cwd=$PWD
+
+    # noti embed renders as a coloured card. Title carries the status,
+    # body is the description, host/cwd/exit go in fields.
+    local args=( embed --title "$TITLE" --color "$color" )
+    [[ -n $BODY ]] && args+=( --desc "$BODY" )
+    args+=( --field Host "$host" --field CWD "$cwd" )
+    (( STATUS != 0 )) && args+=( --field Exit "$STATUS" )
+
+    ( noti "${args[@]}" >/dev/null 2>&1 & disown ) 2>/dev/null
 }
 
 IFS=',' read -r -a __bell_send_list <<<"$BACKENDS"
