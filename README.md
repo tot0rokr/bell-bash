@@ -39,9 +39,9 @@ git clone https://github.com/<your-fork>/bell-bash.git ~/.bell-bash
 
 | Trigger | When | 알림 메시지 |
 |---|---|---|
-| **자동** | 사용자가 친 명령이 `BELL_BASH_THRESHOLD`초 이상 걸림 | `✅ done (312.47s)` / `❌ failed exit 7 (87.13s)` |
-| **명시 wrapper** | `bell <cmd>` 로 wrapping | `✅ done` / `❌ failed (exit 7)`, exit code는 그대로 반환 |
-| **명시 postfix** | `cmd1; bell` (직전 `$?` 캡처) | 위와 동일, body는 `previous command` |
+| **자동** | 사용자가 친 명령이 `BELL_BASH_THRESHOLD`초 이상 걸림 (실패도 동일) | `✅ done (312.47s)` / `❌ failed exit 7 (87.13s)` + 명령 라인 |
+| **명시 wrapper** | `bell <cmd>` 로 wrapping | exit code 그대로 반환. duration 측정해서 본문에 포함 |
+| **명시 postfix** | `cmd1; bell` (직전 `$?` 캡처) | bash-preexec 의 start time 으로 duration 채움. 명령 본문은 `history 1` 라인 (`cmd1; bell` 형태 그대로) |
 
 자동 trigger는 [`bell_skip`](#skip-list-제어) 패턴에 매치되는 인터랙티브 프로그램 (`vim`, `ssh`, `tmux`, `top` 등)은 자동 제외.
 명시 `bell` 호출은 skip-list와 무관하게 항상 발사.
@@ -58,9 +58,9 @@ LLM 에이전트의 `bash_tool`, `bash -c`, `./script.sh` 내부, `ssh host cmd`
 
 | 백엔드 | 의존성 | 효과 |
 |---|---|---|
-| `bel` | 없음 | ASCII BEL (0x07) → stderr. tmux의 `monitor-bell`이 받아 visual bell + window flag로 변환. 터미널 에뮬레이터가 받으면 종소리. |
+| `bel` | 없음 | ASCII BEL (0x07) → stderr. tmux 의 `monitor-bell` 이 받아 window flag 강조. 터미널 에뮬레이터가 받으면 종소리 (or visual bell, 터미널 설정에 의존). |
 | `notify-send` | `libnotify-bin` + GUI 세션 | 데스크톱 토스트. 실패 시 `urgency=critical`. |
-| `webhook` | `noti` CLI + `NOTI_WEBHOOK` env | `noti send` 로 Slack/Discord webhook 전송. |
+| `webhook` | `noti` CLI + `NOTI_WEBHOOK` env | `noti embed` 로 Slack/Discord 카드 발사. 색상 사이드바 (성공=초록, 실패=빨강) + 명령 코드블록 desc + Duration/Host/CWD 필드. |
 
 > **명명 주의** — 함수 `bell()` (사용자가 직접 호출) 과 백엔드 식별자 `bel` (env var 값) 은 한 글자 차이지만 다르다. `bell make` 는 함수 호출, `BELL_BASH_BACKENDS=bel,notify-send` 는 백엔드 선택.
 
@@ -71,13 +71,13 @@ LLM 에이전트의 `bash_tool`, `bash -c`, `./script.sh` 내부, `ssh host cmd`
 | 변수 | 기본값 | 의미 |
 |---|---|---|
 | `BELL_BASH_THRESHOLD` | `5` | 자동 trigger 임계값(초). float 허용. |
-| `BELL_BASH_BACKENDS` | `bel` | 콤마 분리. `bel,notify-send,webhook` 조합. |
+| `BELL_BASH_BACKENDS` | `bel` (lib) / installer 가 환경에 따라 `bel,notify-send[,webhook]` 으로 작성 | 콤마 분리. `bel,notify-send,webhook` 조합 가능. |
 | `BELL_BASH_TIMEOUT_MS` | `4000` | notify-send 토스트 표시 시간 (ms). |
 | `BELL_BASH_SKIP_LIST` | (배열, default 포함) | source **이전**에 정의하면 default 대체. |
-| `BELL_BASH_HOME` | `$HOME/.bell-bash` | installer가 라이브러리를 둘 디렉토리. |
+| `BELL_BASH_HOME` | `$REPO_DIR` (installer 가 자동 감지) | installer 가 등록할 install 위치. clone-in-place 모델이므로 보통 repo 자체. |
 | `NOTI_WEBHOOK` | — | `webhook` 백엔드 사용 시 필요. [`noti`](https://github.com/tot0rokr/noti-bash) 본체에서 사용. |
 
-`BELL_BASH_BASHRC` / `BELL_BASH_TMUXCONF` 는 테스트용으로 installer가 대상 conf 파일 경로를 override할 수 있다.
+`BELL_BASH_BASHRC` / `BELL_BASH_TMUXCONF` / `BELL_BASH_SKILL_LINK` 는 테스트용으로 installer가 대상 경로를 override할 수 있다.
 
 ---
 
@@ -96,10 +96,11 @@ $ bell_skip help              # 전체 도움말
 패턴은 POSIX ERE. 자동으로 줄 시작 anchor + 옵셔널 `sudo ` prefix + word-boundary tail 이 붙는다. 즉:
 
 - `vim` → `sudo vim file` 매치, `vimdiff` 미매치
-- `git[[:space:]]+lz` → `git lz` 매치 (multi-word)
+- `git` → `git status`, `git log`, `git lg`, `git df` 등 전부 매치, `gitlab` / `gitk` 는 미매치 (word boundary 덕분)
 - `python3?` → `python` 또는 `python3` 매치
+- multi-word 패턴이 필요하면 `[[:space:]]+` 로 (예: `'svn[[:space:]]+update'`)
 
-Default 목록(28개)은 `bell_skip` 으로 확인. 영구히 다른 default를 쓰려면 `BELL_BASH_SKIP_LIST=( ... )` 를 source **이전에** 정의.
+Default 목록(28개)은 `bell_skip` 으로 확인 — editors / pagers / mux / monitors / REPL + `git` 전체. 영구히 다른 default를 쓰려면 `BELL_BASH_SKIP_LIST=( ... )` 를 source **이전에** 정의.
 
 ---
 
@@ -109,14 +110,14 @@ Default 목록(28개)은 `bell_skip` 으로 확인. 영구히 다른 default를 
 
 ```tmux
 setw -g monitor-bell on
-set  -g visual-bell on
+set  -g visual-bell off            # 텍스트 팝업 끔 (toast/webhook 과 중복)
 set  -g bell-action other          # none|current|other|any
-setw -g window-status-bell-style 'fg=black,bg=yellow,bold'
+setw -g window-status-bell-style 'fg=#000000,bg=yellow,bold'
 ```
 
-다른 창에서 빌드 끝났을 때 노란색 깜빡임 + status line 메시지로 표시된다. tmux가 실행 중이면 설치 후 `tmux source-file ~/.tmux.conf` 가 필요.
+다른 창에서 빌드 끝났을 때 status line 의 해당 window 가 노란 배경으로 강조된다. tmux 의 `visual-bell` 텍스트 팝업은 의도적으로 off — desktop toast / webhook 알림과 겹쳐 시끄러워서. tmux 가 실행 중이면 설치 후 `tmux source-file ~/.tmux.conf` 가 필요.
 
-기존 `.tmux.conf` 에 `monitor-bell off` / `visual-bell off` 같은 충돌 라인이 있으면 installer가 발견해 알리고 코멘트 처리할지 묻는다 (기본 no — 사용자 설정 보존). 우리 블록은 last-write-wins이므로 코멘트 처리 안 해도 동작은 한다.
+기존 `.tmux.conf` 에 `monitor-bell off` 같은 충돌 라인이 있으면 installer 가 발견해 알리고 코멘트 처리할지 묻는다 (기본 no — 사용자 설정 보존). 우리 블록은 last-write-wins 이므로 코멘트 처리 안 해도 동작은 한다.
 
 ---
 
