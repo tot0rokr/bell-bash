@@ -38,8 +38,11 @@ if ! declare -p BELL_BASH_SKIP_LIST >/dev/null 2>&1; then
         top htop btop gdu watch
         # REPL / interactive
         gdb 'python3?' ipython node psql mysql sqlite3 claude
-        # multi-word patterns
-        'git[[:space:]]+lz'
+        # VCS — most git subcommands are quick and the pager-like ones
+        # (log, diff, lg, df, …) all qualify as interactive output. Skip
+        # the family wholesale; long network commands like `git clone`
+        # that you want a ping for can be wrapped explicitly with `bell`.
+        git
     )
 fi
 
